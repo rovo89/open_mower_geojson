@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import geojson
+import math
 import os
 from pathlib import Path
 from rosbags.rosbag1 import Reader
@@ -30,7 +31,10 @@ AREA_PROPS = {
 }
 
 def pos_to_lonlat(point):
-  (lat, lon) = utm.to_latlon(ORIGIN_X + point.x, ORIGIN_Y + point.y, ORIGIN_ZONE_NUMBER, ORIGIN_ZONE_LETTER)
+  return xy_to_lonlat(point.x, point.y)
+
+def xy_to_lonlat(x, y):
+  (lat, lon) = utm.to_latlon(ORIGIN_X + x, ORIGIN_Y + y, ORIGIN_ZONE_NUMBER, ORIGIN_ZONE_LETTER)
   return (lon, lat)
 
 def area_to_geojson_feature(polygon, type):
@@ -43,14 +47,20 @@ typestore.register(get_types_from_msg(Path('MapArea.msg').read_text(), 'mower_ma
 features = []
 with Reader(args.input) as reader:
   for connection, timestamp, rawdata in reader.messages():
+    msg = typestore.deserialize_ros1(rawdata, connection.msgtype)
     if connection.topic == 'mowing_areas' or connection.topic == 'navigation_areas':
-      msg = typestore.deserialize_ros1(rawdata, connection.msgtype)
       features.append(area_to_geojson_feature(msg.area, connection.topic))
       for obstacle in msg.obstacles:
         features.append(area_to_geojson_feature(obstacle, 'obstacle'))
     elif connection.topic == 'docking_point':
-      # TODO
-      pass
+      q = msg.orientation
+      # This assumes q.x == q.y == 0.
+      angle = math.atan2(2 * q.w * q.z, q.w * q.w - q.z * q.z)
+      geometry = geojson.LineString([
+        xy_to_lonlat(msg.position.x - math.cos(angle), msg.position.y - math.sin(angle)),
+        pos_to_lonlat(msg.position),
+      ])
+      features.append(geojson.Feature(geometry=geometry, properties={'type': 'docking_station', 'name': 'Docking station'}))
 
 with open(args.output, 'w') as f:
   geojson.dump(geojson.FeatureCollection(features), f)

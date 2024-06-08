@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import geojson
+import math
 import os
 from pathlib import Path
 from rosbags.rosbag1 import Writer
@@ -48,7 +49,7 @@ def polygon_shapely_to_ros(polygon):
 with open(args.input, 'r') as f:
   collection = geojson.load(f)
 
-Path(args.output).unlink()
+Path(args.output).unlink(missing_ok=True)
 with Writer(args.output) as writer:
   # Add connections.
   mow_conn = writer.add_connection('mowing_areas', ROS_MapArea.__msgtype__, typestore=typestore)
@@ -63,6 +64,13 @@ with Writer(args.output) as writer:
       obstacles.append(area_to_shapely_polygon(feature))
     elif feature.properties['type'] in ['lawn', 'navigation']:
       areas.append(feature)
+    elif feature.properties['type'] == 'docking_station':
+      pos = lonlat_to_pos(feature.geometry.coordinates[1])
+      approach_pos = lonlat_to_pos(feature.geometry.coordinates[0])
+      angle = math.atan2(pos[1] - approach_pos[1], pos[0] - approach_pos[0])
+      quaternion = ROS_Quaternion(x=0, y=0, z=math.sin(angle / 2), w=math.cos(angle / 2))
+      message = ROS_Pose(position=ROS_Point(x=pos[0], y=pos[1], z=0), orientation=quaternion)
+      writer.write(dock_conn, time.time_ns(), typestore.serialize_ros1(message, ROS_Pose.__msgtype__))
 
   # Process mowing and navigation areas.
   for feature in areas:
